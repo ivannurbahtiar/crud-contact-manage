@@ -1,0 +1,62 @@
+name: Deploy to Amazon ECS
+
+on:
+  push:
+    branches: [ "main" ]
+
+env:
+  AWS_REGION: us-east-1                   # set this to your preferred AWS region, e.g. us-west-1
+  ECR_REPOSITORY: docker2       # set this to your Amazon ECR repository name
+  ECS_SERVICE: hama                 # set this to your Amazon ECS service name
+  ECS_CLUSTER: hama                 # set this to your Amazon ECS cluster name
+  ECS_TASK_DEFINITION: hama # set this to the path to your Amazon ECS task definition
+  ACCOUNT_ID: 022110739617            # set this to your AWS account ID
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Build and Push Image
+      run: |
+        aws ecr get-login-password --region ${{ env.AWS_REGION }} | docker login --username AWS --password-stdin 022110739617.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+        echo "list dict"
+        ls
+
+        echo "build and push"
+        docker build -t docker2 .
+        docker tag docker2:latest 022110739617.dkr.ecr.us-east-1.amazonaws.com/docker2:${{ github.sha }}
+        docker push 022110739617.dkr.ecr.us-east-1.amazonaws.com/docker2:${{ github.sha }}
+
+    - name: Update Image in taskdef.json
+      run: |
+        cd .aws
+        sed -i "s|<IMAGE_URI>|022110739617.dkr.ecr.us-east-1.amazonaws.com/docker2:${{ github.sha }}|g" taskdef.json
+
+    - name: Create taskdef revision
+      run: |
+        cat .aws/taskdef.json
+        
+        aws ecs register-task-definition \
+        --cli-input-json file://.aws/taskdef.json
+
+    - name: Update service
+      run: |
+        aws ecs update-service \
+        --cluster ${{ env.ECS_CLUSTER }} \
+        --service ${{ env.ECS_SERVICE }} \
+        --task-definition ${{ env.ECS_TASK_DEFINITION }} \
+        --force-new-deployment
